@@ -1270,3 +1270,125 @@
     (is (= {:a 1 :b 2} (assoc nil :a 1 :b 2))))
   (testing "inlined assoc on vector"
     (is (= [:a :b] (assoc [] 0 :a 1 :b)))))
+
+
+(def keys-around-a-collision
+  "Two colliding keys and three others, so the root counts five entries."
+  [0 "" :a :b :c])
+
+(deftest a-set-misses-a-colliding-value-it-lacks
+  (is (false? (contains? (into #{} keys-around-a-collision) nil))))
+
+(deftest a-map-finds-no-entry-for-a-colliding-key-it-lacks
+  (is (nil? (find (zipmap keys-around-a-collision keys-around-a-collision) nil))))
+
+(deftest distinct-keeps-an-epoch-inst-among-small-literals
+  (let [xs [nil true false 0 "" "a" :a
+            #uuid "00000000-0000-0000-0000-000000000000"
+            #inst "1970-01-01T00:00:00.000-00:00"]]
+    (is (= xs (vec (distinct xs))))))
+
+
+(deftest merge-preserves-all-colliding-key-updates
+  (let [m (merge
+            (hash-map 0 :old-zero "" :old-empty)
+            (hash-map 0 :new-zero "" :new-empty))]
+    (is (= [:new-zero :new-empty]
+          [(get m 0) (get m "")])))
+
+
+  (let [p (persistent! (reduce dissoc! (transient {1383 true 1384 true 1386 true}) [1383 1384 1386]))]
+    (is (= [0 nil] [(count p) (seq p)])))
+
+  (let [v (vec (range 33))
+        p (persistent! (pop! (transient v)))]
+    (is (= (vec (range 32)) p))
+    (is (= (vec (range 33)) v)))
+
+  )
+
+
+(deftest transient-vector-pop-on-various-sizes
+  (doseq [[construction make-transient]
+          [[:from-persistent transient]
+           [:built-with-conj!
+            (fn [xs] (reduce conj! (transient []) xs))]]
+          n (concat
+              (range 1 161)
+              [255 256 257 258
+               1000 1023 1024 1025 1026
+               1055 1056 1057 1058
+               1087 1088 1089 1090 1100
+               32767 32768 32769
+               32799 32800 32801 32802
+               32831 32832 32833
+               32864 32865 32866])]
+    (testing (str construction ", size " n)
+      (let [original (vec (range n))
+            t (pop! (make-transient original))]
+        (is (= (dec n) (count t)))
+        (when (> n 1)
+          (is (= (- n 2) (nth t (- n 2)))))
+        (let [result (persistent! t)]
+          (is (= (vec (range (dec n))) result))
+          ;; Le vecteur d'origine ne doit pas avoir été modifié.
+          (is (= (vec (range n)) original)))))))
+
+
+(deftest transient-vector-pop-repeatedly
+  (doseq [[construction make-transient]
+          [[:from-persistent transient]
+           [:built-with-conj!
+            (fn [xs] (reduce conj! (transient []) xs))]]
+          [n remaining]
+          [[1 0]
+           [17 0]
+           [33 0]
+           [70 0]
+           [70 17]
+           [100 32]
+           [1100 0]
+           [1100 17]
+           [1100 1024]
+           [1100 1056]
+           [32865 32768]
+           [32865 1056]
+           [32865 0]]]
+    (testing (str construction ", " n " -> " remaining)
+      (let [original (vec (range n))
+            t (reduce
+                (fn [t _] (pop! t))
+                (make-transient original)
+                (range (- n remaining)))]
+        (is (= remaining (count t)))
+        (let [result (persistent! t)]
+          (is (= (vec (range remaining)) result))
+          (is (= (vec (range n)) original))
+          (when (zero? remaining)
+            (is (nil? (seq result)))))))))
+
+
+(deftest transient-vector-assoc-after-pop
+  (doseq [n [33 65 79 97 1057 1089 1100 32801 32865]]
+    (testing (str "size " n)
+      (let [original (vec (range n))
+            last-index (- n 2)
+            result (-> (transient original)
+                     pop!
+                     (assoc! 0 :changed-first)
+                     (assoc! last-index :changed-last)
+                     persistent!)
+            expected (assoc (vec (range (dec n)))
+                       0 :changed-first
+                       last-index :changed-last)]
+        (is (= expected result))
+        (is (= (vec (range n)) original))))))
+
+
+(deftest transient-vector-contains-requires-integer-index
+  (let [t (transient [:a :b])]
+    (doseq [k [0.5 1.5 nil :missing "0"]]
+      (testing (str "key " (pr-str k))
+        (is (false? (contains? t k)))))))
+
+

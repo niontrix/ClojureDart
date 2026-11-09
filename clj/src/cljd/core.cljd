@@ -4690,7 +4690,8 @@
         (aset tail subidx nil)
         ; pop tail
         (let [new-tail-length (- cnt-1 (bit-and-not cnt-1 31))]
-          (set! tail (tv-editable-array-for tcoll cnt-1))
+          ;; ⚠️ cnt-1 is the new count but its last element is at index `(dec cnt-1)`
+          (set! tail (tv-editable-array-for tcoll (dec cnt-1)))
           (cond
             (== 5 shift)
             (aset (.-arr root) (u32-bit-shift-right (dec cnt-1) 5) nil)
@@ -4732,7 +4733,7 @@
   (-contains-key? [coll n]
     (when-not edit
       (throw (ArgumentError. "contains? after persistent!")))
-    (and (<= 0 n) (< n cnt)))
+    (and (int? n) (<= 0 n) (< n cnt)))
   IFn
   (-invoke [coll k]
     (-lookup coll k))
@@ -5081,7 +5082,7 @@
                   k' (aget arr idx)]
               (if (= k' k) (aget arr (inc idx)) not-found))))
         ; collisions node
-        (let [n (* 2 cnt)
+        (let [n (* 2 (.-cnt node))
               arr (.-arr node)]
           (loop [^int i 0]
             (cond
@@ -5110,7 +5111,7 @@
                  k' (aget arr idx)]
              (when (= k k') (#/(MapEntry K V) k' (aget arr (inc idx)))))))
        ; collisions node
-       (let [n (* 2 cnt)
+       (let [n (* 2 (.-cnt node))
              arr (.-arr node)]
          (loop [^int i 0]
            (when (< i n)
@@ -5311,7 +5312,7 @@
        (loop [node a ^int i 0]
          (if (== i n)
            node
-           (recur (.inode_assoc a shift 0 ; 👈 hash doesn't matter for collision node's assoc
+           (recur (.inode_assoc ^BitmapNode node shift 0 ; 👈 hash doesn't matter for collision node's assoc
                     (aget arr i) (aget arr (inc i))) (+ 2 i)))))))
   (^BitmapNode inode_join_with [a ^int shift ^BitmapNode b ^some combine ^some fa ^some fb del]
    (warp->>
@@ -5341,7 +5342,7 @@
                        (aset mx (aget arr mn))
                        (aset mx+1 (aget arr mn+1))
                        (aset mn kb)
-                       (aget mn+1 vb))
+                       (aset mn+1 vb))
                      2)
                    (= (aget arr j) kb)
                    (let [j+1 (inc j)
@@ -5360,7 +5361,7 @@
                            (aset j (aget arr mn))
                            (aset j+1 (aget arr mn+1))
                            (aset mn kb)
-                           (aget mn+1 v))
+                           (aset mn+1 v))
                          0)))
                    :else (recur (+ 2 j))))]
            (when (pos? delta)
@@ -5598,6 +5599,7 @@
                    (when-not (identical? child child') child'))
                  (.inode_without_transient child (+ shift 5) h k))]
            (when child'
+             (set! cnt (+ cnt (- (.-cnt child') child-cnt)))
              (if (and (== 1 (.-cnt child')) (zero? (bit-xor (.-bitmap_hi child') (.-bitmap_lo child'))))
                ; inline kv
                (let [k (aget (.-arr child') 0)
@@ -5613,7 +5615,6 @@
                      (recur i-1 (dec i-1))))
                  (aset arr idx k)
                  (aset arr (inc idx) v)
-                 (set! cnt (dec cnt))
                  (set! bitmap-hi (bit-or bitmap-hi bit))
                  (set! bitmap-lo (bit-or bitmap-lo bit)))
                ; just update in place
@@ -7686,8 +7687,7 @@
                            ~(count entries) ~hi ~lo ~(tagged-literal 'dart fixed-list)))
                       ; collision
                       `(cljd.core/BitmapNode ~(count entries) 0 0
-                         ~(tagged-literal 'dart (with-meta {:fixed true}
-                                                  (into [] cat entries))))))]
+                         ~(tagged-literal 'dart (with-meta (into [] cat entries) {:fixed true})))))]
       `(cljd.core/PersistentHashMap
          ~(cond->> (meta m) quoted (list 'quote))
          (-> ~(mk-node stable-m 0)
